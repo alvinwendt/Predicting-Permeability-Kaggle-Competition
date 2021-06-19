@@ -1,0 +1,149 @@
+---
+title: "Model Testing in R"
+author: "Alvin Wendt"
+date: "3/23/2021"
+output: html_document
+---
+
+Load Libraries
+```{r}
+library(tidyverse)
+library(knitr)
+library(tidymodels)
+library(ranger)
+```
+## Explore Data
+
+read in data
+```{r}
+perm <- read.csv('train.csv')
+```
+
+```{r}
+perm %>%
+  ggplot(aes(phi,
+             permeability
+  )) +
+  geom_boxplot(outlier.alpha = 0.5) +
+  coord_flip() 
+
+```
+Build Model (Simple Linear Regression)
+```{r}
+set.seed(1234)
+perm_split <- perm %>%
+  initial_split(strata = permeability)
+
+perm_train <- training(perm_split)
+perm_test <- testing(perm_split)
+```
+
+```{r}
+lm_spec <- linear_reg() %>% 
+  set_engine(engine = "lm")
+
+lm_fit <- lm_spec %>% 
+  fit(phi ~ .,
+    data = perm_train)
+```
+
+```{r}
+tidy(lm_fit) %>% arrange(-estimate)
+```
+Build Model (Random Forest)
+```{r}
+rf_spec <- rand_forest(mode = 'regression') %>% 
+  set_engine('ranger')
+
+rf_fit <- rf_spec %>% 
+  fit(phi ~ .,
+    data = perm_train)
+```
+
+Evaluate Model
+```{r}
+results_train <- lm_fit %>% 
+  predict(new_data = perm_train) %>% 
+    mutate(
+    truth = perm_train$permeability,
+    model = "lm"
+  ) %>%
+  bind_rows(rf_fit %>%
+    predict(new_data =perm_train) %>%
+    mutate(
+      truth = perm_train$permeability,
+      model = "rf"
+    ))
+  
+```
+
+```{r}
+results_test <- lm_fit %>% 
+  predict(new_data = perm_test) %>% 
+    mutate(
+    truth = perm_test$permeability,
+    model = "lm"
+  ) %>%
+  bind_rows(rf_fit %>%
+    predict(new_data =perm_test) %>%
+    mutate(
+      truth = perm_test$permeability,
+      model = "rf"
+    ))
+```
+
+```{r}
+results_train %>%
+  group_by(model) %>%
+  rmse(truth = truth, estimate = .pred)
+```
+
+```{r}
+results_test %>%
+  group_by(model) %>%
+  rmse(truth = truth, estimate = .pred)
+```
+
+```{r}
+results_test %>%
+  mutate(train = "testing") %>%
+  bind_rows(results_train %>%
+    mutate(train = "training")) %>%
+  ggplot(aes(truth, .pred, color = model)) +
+  geom_abline(lty = 2, color = "gray80", size = 1.5) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~train) +
+  labs(
+    x = "Truth",
+    y = "Predicted attendance",
+    color = "Type of model"
+  )
+```
+
+```{r}
+set.seed(1234)
+perm_folds <- vfold_cv(perm_train, strata = permeability)
+
+rf_res <- fit_resamples(
+  phi ~ .,
+  rf_spec,
+  perm_folds,
+  control = control_resamples(save_pred = TRUE)
+)
+
+rf_res %>%
+  collect_metrics()
+```
+
+```{r}
+rf_res %>%
+  unnest(.predictions) %>%
+  ggplot(aes(permeability, .pred, color = id)) +
+  geom_abline(lty = 2, color = "gray80", size = 1.5) +
+  geom_point(alpha = 0.5) +
+  labs(
+    x = "Truth",
+    y = "Predicted perm",
+    color = NULL)
+```
+
